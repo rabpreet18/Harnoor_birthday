@@ -38,7 +38,7 @@ const YT_START_SECONDS = 84; // start offset
 // Card text
 const CARD_TITLE = "HAPPY BIRTHDAY HUNNY";
 const CARD_MESSAGE =
-  "This is just me being a part of your non‑lowkey birthday this year hehe. Thank you for being my exploring, bakehold, music, deep talks and everything partner.";
+  "This is just me being a part of your non-lowkey birthday this year hehe. Thank you for being my exploring, bakchodi, music, deep talks and random walks partner. Seeing you grow over this last one year has been truly gratifying. Can't wait to see all the success, happiness and masti this next year brings for. I miss you <3";
 const CARD_SIGN = "love, Rabbo";
 
 // ---------- UTILS ----------
