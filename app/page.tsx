@@ -25,10 +25,10 @@ const BG_IMG =
 
 // Google Drive file IDs converted to direct image URLs (files must be public: Anyone with link → Viewer)
 const PHOTO_URLS = [
-  "https://drive.google.com/uc?id=1V-7-g4w2gL-4LQjw0Z2F4iyR3hg7PJX3",
-  "https://drive.google.com/uc?id=1tUfkOGbT-MRMQFYrrM89M2MPD3cnLI3m",
-  "https://drive.google.com/uc?id=19KqIe21G_pySxTik2WW_m7r9m-ioCbMT",
-  "https://drive.google.com/uc?id=1gQfAZ_JQ0kXvQiB4wxl0QjQnsGN22uT3",
+  "https://github.com/rabpreet18/Harnoor_birthday/blob/main/app/34f04288-b2c6-4111-8f3c-8e188df538ac.JPG",
+  "https://github.com/rabpreet18/Harnoor_birthday/blob/main/app/IMG_1444.PNG",
+  "https://github.com/rabpreet18/Harnoor_birthday/blob/main/app/IMG_1752.PNG",
+  "https://github.com/rabpreet18/Harnoor_birthday/blob/main/app/IMG_1822.jpg",
 ];
 
 // YouTube song (hard‑coded) — ID from https://youtu.be/B-2BCSxnyHA?si=...&t=84
