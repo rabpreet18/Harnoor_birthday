@@ -6,25 +6,18 @@ import { Html, OrbitControls, Environment, RoundedBox } from "@react-three/drei"
 import { animated, useSpring } from "@react-spring/three";
 import YouTube from "react-youtube";
 
-/**
- * Birthday 3D — precision pass
- * ✓ L‑shaped skyline starting exactly at table edges (no bottom black)
- * ✓ 10% zoom‑out after Start
- * ✓ Instructions printed ON the table (high‑res decals)
- * ✓ Card repositioned & always visible
- * ✓ Cake closer to reference (layers, drizzle, rosettes, berries, sticks)
- * ✓ Gingham cloth (black/white) + walnut table under it
- * ✓ Photo frames robust loader with fallback
- * ✓ Drag to rotate (OrbitControls default), zoom, pan
+/** POLISH PASS 2
+ * - 3D L‑shape skyline (back wall + corner curve + side wall) – bottoms sit on table cloth (no black strip)
+ * - 10% zoom‑out after Start (kept)
+ * - One crisp instruction line printed on the table
+ * - Card grows/comes forward when opened, shrinks back when closed
+ * - Cake is colorful with bottom designs (pearls + flowers + scallops)
+ * - Cloth changed to lilac & black like reel
  */
 
 // ---------------- HARD‑CODED ASSETS ----------------
-const SKYLINE =
-  "https://upload.wikimedia.org/wikipedia/commons/d/d1/Toronto_Skyline_at_night_-b.jpg";
-
-// Put p1.jpg..p4.jpg into /public for guaranteed CORS‑free texture loads
-const PHOTOS = ["/p1.jpg", "/p2.jpg", "/p3.jpg", "/p4.jpg"]; // change if needed
-
+const SKYLINE = "https://upload.wikimedia.org/wikipedia/commons/d/d1/Toronto_Skyline_at_night_-b.jpg";
+const PHOTOS = ["/p1.jpg", "/p2.jpg", "/p3.jpg", "/p4.jpg"]; // ensure these exist in /public
 const YT_ID = "B-2BCSxnyHA";
 const YT_START = 84;
 
@@ -37,7 +30,6 @@ const CARD = {
 
 // ---------------- UTILITIES ----------------
 function loadTexture(url: string): THREE.Texture {
-  // robust loader with graceful fallback to a checker placeholder
   const tex = new THREE.Texture();
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -48,6 +40,7 @@ function loadTexture(url: string): THREE.Texture {
     tex.anisotropy = 16;
     tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   };
   img.onerror = () => {
     const c = document.createElement("canvas");
@@ -65,20 +58,17 @@ function loadTexture(url: string): THREE.Texture {
   img.src = url;
   return tex;
 }
+const useImage = (url: string) => useMemo(() => loadTexture(url), [url]);
 
-function useImage(url: string) {
-  return useMemo(() => loadTexture(url), [url]);
-}
-
-function useClothTextureBW() {
-  // black & white gingham like your reference
+// Lilac & black gingham
+function useClothTextureLilac() {
   return useMemo(() => {
     const N = 1024;
     const c = document.createElement("canvas");
     c.width = c.height = N;
     const ctx = c.getContext("2d")!;
-    const a = "#f1f1f1";
-    const b = "#222";
+    const a = "#e7defa"; // lilac light
+    const b = "#1c1c22"; // near black
     const squares = 12;
     const s = N / squares;
     for (let y = 0; y < squares; y++)
@@ -89,21 +79,18 @@ function useClothTextureBW() {
     const t = new THREE.CanvasTexture(c);
     (t as any).colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(2.8, 2.2);
+    t.repeat.set(2.6, 2.15);
     t.anisotropy = 16;
     return t;
   }, []);
 }
 
-// ---------------- CAMERA RIG (10% zoom out after Start) ----------------
+// Camera zoom‑out rig
 function CameraRig({ started }: { started: boolean }) {
   const { camera } = useThree();
   const startPos = useRef(camera.position.clone());
   const targetPos = useMemo(() => startPos.current.clone().multiplyScalar(1.1), []);
-  const spring = useSpring({
-    t: started ? 1 : 0,
-    config: { mass: 1, tension: 180, friction: 20 },
-  });
+  const spring = useSpring({ t: started ? 1 : 0, config: { mass: 1, tension: 180, friction: 20 } });
   useFrame(() => {
     const p = startPos.current.clone().lerp(targetPos, spring.t.get());
     camera.position.copy(p);
@@ -112,41 +99,48 @@ function CameraRig({ started }: { started: boolean }) {
   return null;
 }
 
-// ---------------- L‑SHAPED SKYLINE (no floor gaps) ----------------
-function SkylineL() {
+// 3D L‑shape skyline: back wall + quarter‑cylinder corner + side wall
+function SkylineL3D() {
   const tex = useImage(SKYLINE);
-  // Align bottom with the cloth plane y=0.1
-  const tableY = 0.1;
-  // Use aspect ratio to size panels
-  const faceW = 28; // width per face
-  const faceH = (faceW * 9) / 16; // keep 16:9
-  const offset = 5.1; // start exactly at table edge (half table depth ≈ 5)
-  const heightCenter = tableY + faceH / 2; // bottom sits on table level
+  const tableY = 0.1; // cloth height
+  const faceW = 28; // used for sizing
+  const faceH = (faceW * 9) / 16; // 16:9
+  const tableHalfDepth = 5; // matches DateTable below
 
+  // Material set to Basic so lighting doesn’t dim the photo
   const mat = useMemo(
     () => new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }),
     [tex]
   );
 
+  // Back wall (Z‑)
+  const backPos: [number, number, number] = [0, tableY + faceH / 2, -tableHalfDepth - 0.1];
+  // Side wall (X+)
+  const sidePos: [number, number, number] = [7.1, tableY + faceH / 2, 0];
+  // Corner: quarter cylinder bridging back & side, with same texture repeated
+  const cornerRadius = 7.1; // matches sidePos.x
+
   return (
     <group>
-      {/* back wall (Z‑) touching table rear edge */}
-      <mesh position={[0, heightCenter, -offset]}>
-        <planeGeometry args={[faceW, faceH]} />
+      <mesh position={backPos}>
+        <boxGeometry args={[faceW, faceH, 0.1]} />
         <primitive attach="material" object={mat} />
       </mesh>
-      {/* side wall (X+) touching right table edge */}
-      <mesh rotation={[0, -Math.PI / 2, 0]} position={[7.1, heightCenter, 0]}>
-        <planeGeometry args={[faceW, faceH]} />
+      <mesh position={sidePos} rotation={[0, -Math.PI / 2, 0]}>
+        <boxGeometry args={[faceW, faceH, 0.1]} />
         <primitive attach="material" object={mat} />
+      </mesh>
+      {/* Corner cyclorama */}
+      <mesh position={[cornerRadius, tableY + faceH / 2, -cornerRadius]} rotation={[0, Math.PI / 2, 0]}>
+        <cylinderGeometry args={[cornerRadius, cornerRadius, faceH, 80, 1, false, Math.PI, Math.PI / 2]} />
+        <meshBasicMaterial map={tex} toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
 }
 
-// ---------------- TABLE + CLOTH ----------------
+// Walnut table + lilac cloth (cloth at y=0.1)
 function DateTable() {
-  // walnut under cloth
   const wood = useMemo(() => {
     const N = 1024;
     const c = document.createElement("canvas");
@@ -166,23 +160,14 @@ function DateTable() {
     t.anisotropy = 8;
     return t;
   }, []);
-
-  const cloth = useClothTextureBW();
+  const cloth = useClothTextureLilac();
 
   return (
     <group>
-      {/* table top */}
       <mesh position={[0, 0, 0]} receiveShadow castShadow>
         <boxGeometry args={[14, 0.18, 10]} />
-        <meshPhysicalMaterial
-          map={wood}
-          metalness={0.05}
-          roughness={0.38}
-          clearcoat={0.65}
-          clearcoatRoughness={0.25}
-        />
+        <meshPhysicalMaterial map={wood} metalness={0.05} roughness={0.38} clearcoat={0.65} clearcoatRoughness={0.25} />
       </mesh>
-      {/* cloth exactly on top (y=0.1) so skyline can sit flush */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.1, 0]} receiveShadow>
         <planeGeometry args={[13.6, 9.8]} />
         <meshStandardMaterial map={cloth} />
@@ -191,7 +176,7 @@ function DateTable() {
   );
 }
 
-// ---------------- PHOTO FRAMES ----------------
+// Photo frame
 function Frame({ url, pos = [0, 0, 0], rot = [0, 0, 0], size = [1.5, 1.05] as [number, number] }) {
   const tex = useImage(url);
   const [w, h] = size;
@@ -216,11 +201,10 @@ function Frame({ url, pos = [0, 0, 0], rot = [0, 0, 0], size = [1.5, 1.05] as [n
   );
 }
 
-// ---------------- CANDLE ----------------
+// Candle
 function Candle({ blown, onToggle }: { blown: boolean; onToggle: () => void }) {
   const flame = useRef<THREE.Sprite>(null!);
   const sparks = useRef<THREE.Points>(null!);
-
   const sparkGeom = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const N = 140;
@@ -233,41 +217,27 @@ function Candle({ blown, onToggle }: { blown: boolean; onToggle: () => void }) {
     g.setAttribute("position", new THREE.BufferAttribute(arr, 3));
     return g;
   }, []);
-
   const flameTex = useMemo(() => {
     const s = 128;
-    const c = document.createElement("canvas");
-    c.width = c.height = s;
+    const c = document.createElement("canvas"); c.width = c.height = s;
     const ctx = c.getContext("2d")!;
     const g = ctx.createRadialGradient(s / 2, s / 2, 4, s / 2, s / 2, s / 2);
-    g.addColorStop(0, "rgba(255,240,180,1)");
-    g.addColorStop(0.35, "rgba(255,170,40,0.95)");
-    g.addColorStop(1, "rgba(255,140,40,0)");
+    g.addColorStop(0, "rgba(255,240,180,1)"); g.addColorStop(0.35, "rgba(255,170,40,0.95)"); g.addColorStop(1, "rgba(255,140,40,0)");
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2); ctx.fill();
-    const t = new THREE.CanvasTexture(c);
-    (t as any).colorSpace = THREE.SRGBColorSpace;
-    return t;
+    const t = new THREE.CanvasTexture(c); (t as any).colorSpace = THREE.SRGBColorSpace; return t;
   }, []);
-
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (flame.current && !blown) {
-      const s = 0.12 + Math.sin(t * 12) * 0.015;
-      flame.current.scale.set(s, s * 1.6, 1);
-      flame.current.position.x = Math.sin(t * 6) * 0.01;
+      const s = 0.12 + Math.sin(t * 12) * 0.015; flame.current.scale.set(s, s * 1.6, 1); flame.current.position.x = Math.sin(t * 6) * 0.01;
     }
     if (sparks.current) {
       const g = sparks.current.geometry as THREE.BufferGeometry;
       const pos = g.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        let y = pos.getY(i) + 0.01 + Math.random() * 0.004;
-        if (y > 0.18) y = -0.03 - Math.random() * 0.03;
-        pos.setY(i, y);
-      }
+      for (let i = 0; i < pos.count; i++) { let y = pos.getY(i) + 0.01 + Math.random() * 0.004; if (y > 0.18) y = -0.03 - Math.random() * 0.03; pos.setY(i, y); }
       pos.needsUpdate = true;
     }
   });
-
   return (
     <group position={[0, 0.95, 0]} onClick={onToggle}>
       <mesh castShadow>
@@ -313,13 +283,13 @@ function Knife({ active }: { active: boolean }) {
   );
 }
 
-// ---------------- CAKE ----------------
+// Colorful cake with bottom designs
 function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void; blown: boolean; setBlown: (v: any) => void }) {
-  // tuned to match your screenshot's palette
-  const icing = new THREE.Color("#ffeaea");
-  const cakeYellow = new THREE.Color("#f0c27b");
-  const creamWhite = new THREE.Color("#fff7f5");
-  const red = new THREE.Color("#e84d4b");
+  const icingTop = new THREE.Color("#ffe3f1"); // pinkish icing
+  const layerYellow = new THREE.Color("#f3c06e");
+  const stripeWhite = new THREE.Color("#fff7f5");
+  const stripeRed = new THREE.Color("#ff4d5a");
+  const green = new THREE.Color("#58c26a");
 
   const { sliceX, topY } = useSpring({ sliceX: cut ? 1.18 : 0, topY: cut ? 0.02 : 0.08, config: { mass: 1, tension: 220, friction: 18 } });
 
@@ -331,57 +301,84 @@ function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void
         <meshStandardMaterial color="#f7f7f7" roughness={0.35} metalness={0.05} />
       </mesh>
 
-      {/* base cake with horizontal stripes */}
+      {/* bottom pearl scallops */}
+      {Array.from({ length: 24 }).map((_, i) => {
+        const a = (i / 24) * Math.PI * 2; const r = 0.95;
+        return (
+          <mesh key={i} position={[Math.cos(a) * r, -0.32 + 0.5, Math.sin(a) * r]} castShadow>
+            <sphereGeometry args={[0.05, 16, 16]} />
+            <meshStandardMaterial color={stripeWhite} roughness={0.2} />
+          </mesh>
+        );
+      })}
+
+      {/* lower body */}
       <mesh castShadow position={[0, 0.05, 0]}>
         <cylinderGeometry args={[0.83, 0.86, 0.36, 64]} />
-        <meshStandardMaterial color={cakeYellow} roughness={0.65} />
+        <meshStandardMaterial color={layerYellow} roughness={0.6} />
       </mesh>
-      {/* white stripe */}
+      {/* stripes */}
       <mesh castShadow position={[0, 0.19, 0]}>
         <cylinderGeometry args={[0.84, 0.84, 0.06, 64]} />
-        <meshStandardMaterial color={creamWhite} roughness={0.4} />
+        <meshStandardMaterial color={stripeWhite} roughness={0.35} />
       </mesh>
-      {/* red stripe */}
       <mesh castShadow position={[0, 0.13, 0]}>
         <cylinderGeometry args={[0.845, 0.845, 0.04, 64]} />
-        <meshStandardMaterial color={red} roughness={0.4} />
+        <meshStandardMaterial color={stripeRed} roughness={0.35} />
       </mesh>
 
-      {/* top layer icing */}
+      {/* top layer */}
       <animated.group position-y={topY}>
         <mesh castShadow position={[0, 0.38, 0]}>
           <cylinderGeometry args={[0.78, 0.78, 0.22, 64]} />
-          <meshStandardMaterial color={icing} roughness={0.45} />
+          <meshStandardMaterial color={icingTop} roughness={0.45} />
         </mesh>
-        {/* rosettes around base of top */}
+        {/* rosettes ring */}
         {Array.from({ length: 12 }).map((_, i) => {
           const a = (i / 12) * Math.PI * 2; const r = 0.72;
           return (
             <mesh key={i} position={[Math.cos(a) * r, 0.47, Math.sin(a) * r]} castShadow>
               <torusGeometry args={[0.07, 0.03, 12, 24]} />
-              <meshStandardMaterial color={creamWhite} roughness={0.25} />
+              <meshStandardMaterial color={stripeWhite} roughness={0.25} />
             </mesh>
           );
         })}
-        {/* strawberries */}
+        {/* little flowers */}
+        {Array.from({ length: 6 }).map((_, i) => {
+          const a = (i / 6) * Math.PI * 2; const r = 0.55;
+          return (
+            <group key={i} position={[Math.cos(a) * r, 0.44, Math.sin(a) * r]}>
+              {Array.from({ length: 5 }).map((__, j) => (
+                <mesh key={j} rotation={[0, 0, (j / 5) * Math.PI * 2]}>
+                  <cylinderGeometry args={[0.01, 0.02, 0.06, 6]} />
+                  <meshStandardMaterial color={stripeWhite} />
+                </mesh>
+              ))}
+              <mesh>
+                <sphereGeometry args={[0.015, 10, 10]} />
+                <meshStandardMaterial color={green} />
+              </mesh>
+            </group>
+          );
+        })}
+        {/* drizzle ring */}
+        <mesh castShadow position={[0, 0.28, 0]}> 
+          <torusGeometry args={[0.77, 0.09, 24, 120]} />
+          <meshPhysicalMaterial color={stripeRed.getStyle()} roughness={0.22} clearcoat={0.4} />
+        </mesh>
+        {/* strawberries + sticks */}
         {[[-0.25, 0.55, 0.2], [0.2, 0.55, -0.12]].map((p, i) => (
           <mesh key={i} position={p as any} castShadow>
             <sphereGeometry args={[0.1, 22, 22]} />
-            <meshStandardMaterial color={red} roughness={0.4} />
+            <meshStandardMaterial color={stripeRed} roughness={0.4} />
           </mesh>
         ))}
-        {/* biscuit sticks */}
         {[[-0.2, 0.4, 0.18, 0.28], [0.16, 0.42, -0.12, -0.18]].map((p, i) => (
           <mesh key={i} position={[p[0], 0.52, p[2]]} rotation={[p[3], 0, 0]} castShadow>
             <cylinderGeometry args={[0.03, 0.03, 0.6, 16]} />
             <meshStandardMaterial color="#8b5a2b" roughness={0.75} />
           </mesh>
         ))}
-        {/* glossy drizzle flowing over edge */}
-        <mesh castShadow position={[0, 0.28, 0]}> 
-          <torusGeometry args={[0.77, 0.09, 24, 120]} />
-          <meshPhysicalMaterial color={red.getStyle()} roughness={0.22} clearcoat={0.4} />
-        </mesh>
         <Candle blown={blown} onToggle={() => setBlown((b: boolean) => !b)} />
       </animated.group>
 
@@ -389,11 +386,10 @@ function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void
       <animated.group position-x={sliceX}>
         <mesh castShadow position={[0, 0.38, 0]}>
           <cylinderGeometry args={[0.78, 0.78, 0.22, 64, 1, false, 0, Math.PI / 5]} />
-          <meshStandardMaterial color={icing} roughness={0.45} />
+          <meshStandardMaterial color={icingTop} roughness={0.45} />
         </mesh>
       </animated.group>
 
-      {/* click area for cutting */}
       <mesh onClick={onCut} position={[0, 0.38, 0]} visible={false}>
         <cylinderGeometry args={[0.85, 0.85, 0.28, 32]} />
         <meshBasicMaterial transparent opacity={0} />
@@ -402,17 +398,22 @@ function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void
   );
 }
 
-// ---------------- CARD (bigger & forced-visible) ----------------
+// Card grows forward when open
 function Card({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  const { rot } = useSpring({ rot: open ? 0 : Math.PI / 2.0, config: { mass: 1, tension: 220, friction: 18 } });
+  const { rot, scl, zLift } = useSpring({
+    rot: open ? 0 : Math.PI / 2.0,
+    scl: open ? 1.2 : 0.9,
+    zLift: open ? 0.25 : 0,
+    config: { mass: 1, tension: 220, friction: 18 },
+  });
   return (
-    <group position={[1.6, 0, 1.0]} rotation={[0, -Math.PI / 8, 0]}>
+    <animated.group position-x={1.6} position-y={0} position-z={zLift as any} rotation={[0, -Math.PI / 8, 0]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[1.7, 1.1]} />
         <meshStandardMaterial color="#f3efe6" />
       </mesh>
-      <animated.group rotation-x={rot} position={[0, 0.001, 0]} onClick={onToggle}>
-        <Html transform position={[0, 0, 0]} distanceFactor={1.0} /* no occlude so it never hides */>
+      <animated.group scale={scl as any} rotation-x={rot as any} position={[0, 0.001, 0]} onClick={onToggle}>
+        <Html transform position={[0, 0, 0]} distanceFactor={1.0}>
           <div style={{ width: 740, height: 460, borderRadius: 22, background: "#fff", boxShadow: "0 26px 44px rgba(0,0,0,0.28)", padding: 30, cursor: "pointer", fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial' }}>
             <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
               <div style={{ fontSize: 52 }}>🧸</div>
@@ -424,36 +425,31 @@ function Card({ open, onToggle }: { open: boolean; onToggle: () => void }) {
           </div>
         </Html>
       </animated.group>
-    </group>
+    </animated.group>
   );
 }
 
-// ---------------- TABLE INSTRUCTION DECALS ----------------
-function TableText({ text, position }: { text: string; position: [number, number, number] }) {
+// One concise instruction decal
+function TableInstruction() {
   const tex = useMemo(() => {
-    const W = 1400, H = 256;
-    const c = document.createElement("canvas");
-    c.width = W; c.height = H;
+    const W = 2000, H = 220;
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
     const ctx = c.getContext("2d")!;
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.font = "700 120px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "700 108px system-ui";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
-    ctx.fillText(text, W / 2, H / 2);
-    const t = new THREE.CanvasTexture(c);
-    (t as any).colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 16;
-    return t;
-  }, [text]);
+    ctx.fillText("Drag • Scroll • Click cake • SPACE blow • Click card", W / 2, H / 2);
+    const t = new THREE.CanvasTexture(c); (t as any).colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16; return t;
+  }, []);
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={position}>
-      <planeGeometry args={[4.8, 0.9]} />
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.101, 4.2]}>
+      <planeGeometry args={[6.2, 0.7]} />
       <meshBasicMaterial map={tex} transparent toneMapped={false} />
     </mesh>
   );
 }
 
-// ---------------- SCENE ----------------
 function Scene({ started }: { started: boolean }) {
   const [cut, setCut] = useState(false);
   const [blown, setBlown] = useState(false);
@@ -461,8 +457,7 @@ function Scene({ started }: { started: boolean }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.code === "Space") setBlown((b) => !b); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   return (
@@ -471,7 +466,7 @@ function Scene({ started }: { started: boolean }) {
       <ambientLight intensity={0.62} />
       <spotLight position={[4, 6, 2]} angle={0.6} penumbra={0.7} intensity={1.35} castShadow />
       <Suspense fallback={null}>
-        <SkylineL />
+        <SkylineL3D />
         <DateTable />
         <Cake cut={cut} onCut={() => setCut((c) => !c)} blown={blown} setBlown={setBlown} />
         <Frame url={PHOTOS[0]} pos={[-2.2, 0.09, 0.1]} rot={[0, THREE.MathUtils.degToRad(20), 0]} />
@@ -479,31 +474,14 @@ function Scene({ started }: { started: boolean }) {
         <Frame url={PHOTOS[2]} pos={[1.25, 0.09, -1.45]} rot={[0, THREE.MathUtils.degToRad(-38), 0]} />
         <Frame url={PHOTOS[3]} pos={[2.35, 0.09, 0.15]} rot={[0, THREE.MathUtils.degToRad(-16), 0]} />
         <Card open={cardOpen} onToggle={() => setCardOpen((o) => !o)} />
-        {/* table‑printed instructions */}
-        <TableText text="Drag to rotate • Scroll to zoom • Right/Shift‑drag to pan" position={[0, 0.101, 3.5]} />
-        <TableText text="Click cake to cut • Press SPACE to blow candle" position={[0, 0.101, 2.4]} />
-        <TableText text="Click card to open / close" position={[0, 0.101, 1.2]} />
+        <TableInstruction />
         <Environment preset="city" />
       </Suspense>
-
       <Knife active={cut} />
-
-      <OrbitControls
-        enablePan
-        enableZoom
-        rotateSpeed={0.9}
-        zoomSpeed={0.9}
-        panSpeed={0.8}
-        dampingFactor={0.06}
-        enableDamping
+      <OrbitControls enablePan enableZoom rotateSpeed={0.9} zoomSpeed={0.9} panSpeed={0.8} dampingFactor={0.06} enableDamping
         mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }}
-        touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
-        minDistance={3.5}
-        maxDistance={12}
-        target={[0, 0.45, 0]}
-        maxPolarAngle={Math.PI * 0.9}
-        minPolarAngle={0.05}
-      />
+        touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }} minDistance={3.5} maxDistance={12} target={[0, 0.45, 0]}
+        maxPolarAngle={Math.PI * 0.9} minPolarAngle={0.05} />
     </>
   );
 }
@@ -527,7 +505,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* bigger control buttons */}
       <div style={{ position: "absolute", top: 14, right: 14, zIndex: 15, display: "flex", gap: 10 }}>
         <button onClick={() => { setMuted((m) => !m); if (player.current) (muted ? player.current.unMute() : player.current.mute()); }}
           style={{ padding: "12px 16px", background: "rgba(255,255,255,.18)", color: "#fff", border: 0, borderRadius: 12, cursor: "pointer", fontSize: 15, backdropFilter: "blur(6px)" }}>
@@ -543,7 +520,6 @@ export default function Page() {
         <Scene started={started} />
       </Canvas>
 
-      {/* hidden YouTube audio */}
       <div style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}>
         <YouTube
           videoId={YT_ID}
