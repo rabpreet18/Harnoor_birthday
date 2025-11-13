@@ -1,31 +1,29 @@
 "use client";
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, Environment, RoundedBox } from "@react-three/drei";
 import { animated, useSpring } from "@react-spring/three";
 import YouTube from "react-youtube";
 
 /**
- * Birthday 3D — high‑fidelity version matching the Instagram reference
- * Changes vs prior:
- *  - Skyline on a 4‑face cyclorama (no black), high anisotropy, no stretch
- *  - Walnut date‑table with checkered cloth like the reel
- *  - Prettier cake (layers, drizzle, rosettes, strawberries, sticks)
- *  - Visible knife animation when cutting
- *  - Sparkly candle flame + particles
- *  - Bevelled photo frames
- *  - Larger, prettier card and bigger type
- *  - Clear instructions; bigger Unmute/Play
- *  - OrbitControls mapped to simple drag to rotate (default left‑drag), zoom, pan
+ * Birthday 3D — precision pass
+ * ✓ L‑shaped skyline starting exactly at table edges (no bottom black)
+ * ✓ 10% zoom‑out after Start
+ * ✓ Instructions printed ON the table (high‑res decals)
+ * ✓ Card repositioned & always visible
+ * ✓ Cake closer to reference (layers, drizzle, rosettes, berries, sticks)
+ * ✓ Gingham cloth (black/white) + walnut table under it
+ * ✓ Photo frames robust loader with fallback
+ * ✓ Drag to rotate (OrbitControls default), zoom, pan
  */
 
 // ---------------- HARD‑CODED ASSETS ----------------
 const SKYLINE =
   "https://upload.wikimedia.org/wikipedia/commons/d/d1/Toronto_Skyline_at_night_-b.jpg";
 
-// Put p1.jpg..p4.jpg into /public for bulletproof CORS‑free textures
-const PHOTOS = ["/p1.jpg", "/p2.jpg", "/p3.jpg", "/p4.jpg"]; // or swap to Drive /uc?id=... if you must
+// Put p1.jpg..p4.jpg into /public for guaranteed CORS‑free texture loads
+const PHOTOS = ["/p1.jpg", "/p2.jpg", "/p3.jpg", "/p4.jpg"]; // change if needed
 
 const YT_ID = "B-2BCSxnyHA";
 const YT_START = 84;
@@ -38,74 +36,109 @@ const CARD = {
 };
 
 // ---------------- UTILITIES ----------------
-function useImage(url: string) {
-  return useMemo(() => {
-    const loader = new THREE.TextureLoader();
-    loader.setCrossOrigin("anonymous");
-    const t = loader.load(url);
-    (t as any).colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 16;
-    t.minFilter = THREE.LinearMipmapLinearFilter;
-    t.magFilter = THREE.LinearFilter;
-    return t;
-  }, [url]);
+function loadTexture(url: string): THREE.Texture {
+  // robust loader with graceful fallback to a checker placeholder
+  const tex = new THREE.Texture();
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    tex.image = img;
+    tex.needsUpdate = true;
+    (tex as any).colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 16;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+  };
+  img.onerror = () => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 256;
+    const g = c.getContext("2d")!;
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        g.fillStyle = (x + y) % 2 ? "#ddd" : "#bbb";
+        g.fillRect((x * 256) / 8, (y * 256) / 8, 256 / 8, 256 / 8);
+      }
+    tex.image = c;
+    tex.needsUpdate = true;
+    (tex as any).colorSpace = THREE.SRGBColorSpace;
+  };
+  img.src = url;
+  return tex;
 }
 
-function useClothTexture() {
-  // Dark checkered cloth similar to the reel
+function useImage(url: string) {
+  return useMemo(() => loadTexture(url), [url]);
+}
+
+function useClothTextureBW() {
+  // black & white gingham like your reference
   return useMemo(() => {
-    const N = 512;
+    const N = 1024;
     const c = document.createElement("canvas");
     c.width = c.height = N;
     const ctx = c.getContext("2d")!;
-    const a = "#bdb9b2";
-    const b = "#a49f98";
-    const squares = 10;
+    const a = "#f1f1f1";
+    const b = "#222";
+    const squares = 12;
     const s = N / squares;
-    for (let y = 0; y < squares; y++) {
+    for (let y = 0; y < squares; y++)
       for (let x = 0; x < squares; x++) {
         ctx.fillStyle = (x + y) % 2 === 0 ? a : b;
         ctx.fillRect(x * s, y * s, s, s);
       }
-    }
     const t = new THREE.CanvasTexture(c);
     (t as any).colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(4, 4);
+    t.repeat.set(2.8, 2.2);
     t.anisotropy = 16;
     return t;
   }, []);
 }
 
-// ---------------- SKYLINE BOX (4 faces, no distortion) ----------------
-function SkylineBox() {
+// ---------------- CAMERA RIG (10% zoom out after Start) ----------------
+function CameraRig({ started }: { started: boolean }) {
+  const { camera } = useThree();
+  const startPos = useRef(camera.position.clone());
+  const targetPos = useMemo(() => startPos.current.clone().multiplyScalar(1.1), []);
+  const spring = useSpring({
+    t: started ? 1 : 0,
+    config: { mass: 1, tension: 180, friction: 20 },
+  });
+  useFrame(() => {
+    const p = startPos.current.clone().lerp(targetPos, spring.t.get());
+    camera.position.copy(p);
+    camera.updateProjectionMatrix();
+  });
+  return null;
+}
+
+// ---------------- L‑SHAPED SKYLINE (no floor gaps) ----------------
+function SkylineL() {
   const tex = useImage(SKYLINE);
-  // assume 16:9 skyline; use wide quads; repeat on all four sides
-  const W = 28; // width per face
-  const H = (W * 9) / 16; // preserve aspect ratio
-  const R = 14; // radius from center
-  const commonMat = useMemo(() => new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }), [tex]);
+  // Align bottom with the cloth plane y=0.1
+  const tableY = 0.1;
+  // Use aspect ratio to size panels
+  const faceW = 28; // width per face
+  const faceH = (faceW * 9) / 16; // keep 16:9
+  const offset = 5.1; // start exactly at table edge (half table depth ≈ 5)
+  const heightCenter = tableY + faceH / 2; // bottom sits on table level
+
+  const mat = useMemo(
+    () => new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }),
+    [tex]
+  );
+
   return (
-    <group position={[0, H / 2 - 0.2, 0]}>
-      {/* North */}
-      <mesh position={[0, 0, -R]}>
-        <planeGeometry args={[W, H]} />
-        <primitive attach="material" object={commonMat} />
+    <group>
+      {/* back wall (Z‑) touching table rear edge */}
+      <mesh position={[0, heightCenter, -offset]}>
+        <planeGeometry args={[faceW, faceH]} />
+        <primitive attach="material" object={mat} />
       </mesh>
-      {/* South */}
-      <mesh rotation={[0, Math.PI, 0]} position={[0, 0, R]}>
-        <planeGeometry args={[W, H]} />
-        <primitive attach="material" object={commonMat} />
-      </mesh>
-      {/* West */}
-      <mesh rotation={[0, Math.PI / 2, 0]} position={[-R, 0, 0]}>
-        <planeGeometry args={[W, H]} />
-        <primitive attach="material" object={commonMat} />
-      </mesh>
-      {/* East */}
-      <mesh rotation={[0, -Math.PI / 2, 0]} position={[R, 0, 0]}>
-        <planeGeometry args={[W, H]} />
-        <primitive attach="material" object={commonMat} />
+      {/* side wall (X+) touching right table edge */}
+      <mesh rotation={[0, -Math.PI / 2, 0]} position={[7.1, heightCenter, 0]}>
+        <planeGeometry args={[faceW, faceH]} />
+        <primitive attach="material" object={mat} />
       </mesh>
     </group>
   );
@@ -113,6 +146,7 @@ function SkylineBox() {
 
 // ---------------- TABLE + CLOTH ----------------
 function DateTable() {
+  // walnut under cloth
   const wood = useMemo(() => {
     const N = 1024;
     const c = document.createElement("canvas");
@@ -133,7 +167,7 @@ function DateTable() {
     return t;
   }, []);
 
-  const cloth = useClothTexture();
+  const cloth = useClothTextureBW();
 
   return (
     <group>
@@ -148,16 +182,16 @@ function DateTable() {
           clearcoatRoughness={0.25}
         />
       </mesh>
-      {/* cloth */}
+      {/* cloth exactly on top (y=0.1) so skyline can sit flush */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.1, 0]} receiveShadow>
-        <planeGeometry args={[13.6, 9.6]} />
+        <planeGeometry args={[13.6, 9.8]} />
         <meshStandardMaterial map={cloth} />
       </mesh>
     </group>
   );
 }
 
-// ---------------- PHOTO FRAMES (rounded bevel) ----------------
+// ---------------- PHOTO FRAMES ----------------
 function Frame({ url, pos = [0, 0, 0], rot = [0, 0, 0], size = [1.5, 1.05] as [number, number] }) {
   const tex = useImage(url);
   const [w, h] = size;
@@ -182,7 +216,7 @@ function Frame({ url, pos = [0, 0, 0], rot = [0, 0, 0], size = [1.5, 1.05] as [n
   );
 }
 
-// ---------------- CANDLE (flame + sparkles) ----------------
+// ---------------- CANDLE ----------------
 function Candle({ blown, onToggle }: { blown: boolean; onToggle: () => void }) {
   const flame = useRef<THREE.Sprite>(null!);
   const sparks = useRef<THREE.Points>(null!);
@@ -279,10 +313,16 @@ function Knife({ active }: { active: boolean }) {
   );
 }
 
+// ---------------- CAKE ----------------
 function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void; blown: boolean; setBlown: (v: any) => void }) {
-  const icing = new THREE.Color("#ffe6e6");
-  const cake = new THREE.Color("#f7c57f");
+  // tuned to match your screenshot's palette
+  const icing = new THREE.Color("#ffeaea");
+  const cakeYellow = new THREE.Color("#f0c27b");
+  const creamWhite = new THREE.Color("#fff7f5");
+  const red = new THREE.Color("#e84d4b");
+
   const { sliceX, topY } = useSpring({ sliceX: cut ? 1.18 : 0, topY: cut ? 0.02 : 0.08, config: { mass: 1, tension: 220, friction: 18 } });
+
   return (
     <group position={[0, 0.5, 0]}>
       {/* plate */}
@@ -290,73 +330,93 @@ function Cake({ cut, onCut, blown, setBlown }: { cut: boolean; onCut: () => void
         <circleGeometry args={[1.25, 64]} />
         <meshStandardMaterial color="#f7f7f7" roughness={0.35} metalness={0.05} />
       </mesh>
-      {/* base */}
+
+      {/* base cake with horizontal stripes */}
       <mesh castShadow position={[0, 0.05, 0]}>
-        <cylinderGeometry args={[0.8, 0.86, 0.34, 64]} />
-        <meshStandardMaterial color={cake} roughness={0.7} />
+        <cylinderGeometry args={[0.83, 0.86, 0.36, 64]} />
+        <meshStandardMaterial color={cakeYellow} roughness={0.65} />
       </mesh>
-      <mesh castShadow position={[0, 0.23, 0]}>
-        <torusGeometry args={[0.79, 0.08, 24, 100]} />
-        <meshStandardMaterial color="#ff615f" roughness={0.35} metalness={0.05} />
+      {/* white stripe */}
+      <mesh castShadow position={[0, 0.19, 0]}>
+        <cylinderGeometry args={[0.84, 0.84, 0.06, 64]} />
+        <meshStandardMaterial color={creamWhite} roughness={0.4} />
       </mesh>
+      {/* red stripe */}
+      <mesh castShadow position={[0, 0.13, 0]}>
+        <cylinderGeometry args={[0.845, 0.845, 0.04, 64]} />
+        <meshStandardMaterial color={red} roughness={0.4} />
+      </mesh>
+
+      {/* top layer icing */}
       <animated.group position-y={topY}>
-        <mesh castShadow position={[0, 0.36, 0]}>
-          <cylinderGeometry args={[0.75, 0.75, 0.22, 64]} />
-          <meshStandardMaterial color={icing} roughness={0.5} />
+        <mesh castShadow position={[0, 0.38, 0]}>
+          <cylinderGeometry args={[0.78, 0.78, 0.22, 64]} />
+          <meshStandardMaterial color={icing} roughness={0.45} />
         </mesh>
+        {/* rosettes around base of top */}
         {Array.from({ length: 12 }).map((_, i) => {
-          const a = (i / 12) * Math.PI * 2; const r = 0.68;
+          const a = (i / 12) * Math.PI * 2; const r = 0.72;
           return (
             <mesh key={i} position={[Math.cos(a) * r, 0.47, Math.sin(a) * r]} castShadow>
               <torusGeometry args={[0.07, 0.03, 12, 24]} />
-              <meshStandardMaterial color="#fff" roughness={0.25} metalness={0.05} />
+              <meshStandardMaterial color={creamWhite} roughness={0.25} />
             </mesh>
           );
         })}
-        {[[-0.2, 0.38, 0.18, 0.28], [0.16, 0.4, -0.12, -0.18]].map((p, i) => (
-          <mesh key={i} position={[p[0], 0.5, p[2]]} rotation={[p[3], 0, 0]} castShadow>
-            <cylinderGeometry args={[0.03, 0.03, 0.55, 16]} />
+        {/* strawberries */}
+        {[[-0.25, 0.55, 0.2], [0.2, 0.55, -0.12]].map((p, i) => (
+          <mesh key={i} position={p as any} castShadow>
+            <sphereGeometry args={[0.1, 22, 22]} />
+            <meshStandardMaterial color={red} roughness={0.4} />
+          </mesh>
+        ))}
+        {/* biscuit sticks */}
+        {[[-0.2, 0.4, 0.18, 0.28], [0.16, 0.42, -0.12, -0.18]].map((p, i) => (
+          <mesh key={i} position={[p[0], 0.52, p[2]]} rotation={[p[3], 0, 0]} castShadow>
+            <cylinderGeometry args={[0.03, 0.03, 0.6, 16]} />
             <meshStandardMaterial color="#8b5a2b" roughness={0.75} />
           </mesh>
         ))}
-        {[[-0.25, 0.53, 0.2], [0.2, 0.53, -0.12]].map((p, i) => (
-          <mesh key={i} position={p as any} castShadow>
-            <sphereGeometry args={[0.09, 20, 20]} />
-            <meshStandardMaterial color="#e74c3c" roughness={0.45} />
-          </mesh>
-        ))}
+        {/* glossy drizzle flowing over edge */}
+        <mesh castShadow position={[0, 0.28, 0]}> 
+          <torusGeometry args={[0.77, 0.09, 24, 120]} />
+          <meshPhysicalMaterial color={red.getStyle()} roughness={0.22} clearcoat={0.4} />
+        </mesh>
         <Candle blown={blown} onToggle={() => setBlown((b: boolean) => !b)} />
       </animated.group>
-      {/* slice */}
+
+      {/* cut slice */}
       <animated.group position-x={sliceX}>
-        <mesh castShadow position={[0, 0.36, 0]}>
-          <cylinderGeometry args={[0.75, 0.75, 0.22, 64, 1, false, 0, Math.PI / 5]} />
-          <meshStandardMaterial color={icing} roughness={0.5} />
+        <mesh castShadow position={[0, 0.38, 0]}>
+          <cylinderGeometry args={[0.78, 0.78, 0.22, 64, 1, false, 0, Math.PI / 5]} />
+          <meshStandardMaterial color={icing} roughness={0.45} />
         </mesh>
       </animated.group>
-      {/* cut hit area */}
+
+      {/* click area for cutting */}
       <mesh onClick={onCut} position={[0, 0.38, 0]} visible={false}>
-        <cylinderGeometry args={[0.8, 0.8, 0.28, 32]} />
+        <cylinderGeometry args={[0.85, 0.85, 0.28, 32]} />
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
     </group>
   );
 }
 
+// ---------------- CARD (bigger & forced-visible) ----------------
 function Card({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { rot } = useSpring({ rot: open ? 0 : Math.PI / 2.0, config: { mass: 1, tension: 220, friction: 18 } });
   return (
-    <group position={[1.8, 0, -0.2]}>
+    <group position={[1.6, 0, 1.0]} rotation={[0, -Math.PI / 8, 0]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <planeGeometry args={[1.55, 1.0]} />
+        <planeGeometry args={[1.7, 1.1]} />
         <meshStandardMaterial color="#f3efe6" />
       </mesh>
       <animated.group rotation-x={rot} position={[0, 0.001, 0]} onClick={onToggle}>
-        <Html transform position={[0, 0, 0]} distanceFactor={1.05} occlude>
-          <div style={{ width: 700, height: 440, borderRadius: 22, background: "#fff", boxShadow: "0 24px 42px rgba(0,0,0,0.28)", padding: 30, cursor: "pointer", fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial' }}>
+        <Html transform position={[0, 0, 0]} distanceFactor={1.0} /* no occlude so it never hides */>
+          <div style={{ width: 740, height: 460, borderRadius: 22, background: "#fff", boxShadow: "0 26px 44px rgba(0,0,0,0.28)", padding: 30, cursor: "pointer", fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial' }}>
             <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-              <div style={{ fontSize: 50 }}>🧸</div>
-              <h2 style={{ margin: 0, fontSize: 34, letterSpacing: 1 }}>{CARD.title}</h2>
+              <div style={{ fontSize: 52 }}>🧸</div>
+              <h2 style={{ margin: 0, fontSize: 36, letterSpacing: 1 }}>{CARD.title}</h2>
             </div>
             <p style={{ marginTop: 18, fontSize: 22, lineHeight: 1.6, color: "#333" }}>{CARD.message}</p>
             <div style={{ marginTop: 24, fontWeight: 700, fontSize: 20 }}>{CARD.sign}</div>
@@ -368,7 +428,33 @@ function Card({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   );
 }
 
-function Scene() {
+// ---------------- TABLE INSTRUCTION DECALS ----------------
+function TableText({ text, position }: { text: string; position: [number, number, number] }) {
+  const tex = useMemo(() => {
+    const W = 1400, H = 256;
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "700 120px system-ui";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
+    ctx.fillText(text, W / 2, H / 2);
+    const t = new THREE.CanvasTexture(c);
+    (t as any).colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 16;
+    return t;
+  }, [text]);
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={position}>
+      <planeGeometry args={[4.8, 0.9]} />
+      <meshBasicMaterial map={tex} transparent toneMapped={false} />
+    </mesh>
+  );
+}
+
+// ---------------- SCENE ----------------
+function Scene({ started }: { started: boolean }) {
   const [cut, setCut] = useState(false);
   const [blown, setBlown] = useState(false);
   const [cardOpen, setCardOpen] = useState(true);
@@ -381,10 +467,11 @@ function Scene() {
 
   return (
     <>
+      <CameraRig started={started} />
       <ambientLight intensity={0.62} />
       <spotLight position={[4, 6, 2]} angle={0.6} penumbra={0.7} intensity={1.35} castShadow />
       <Suspense fallback={null}>
-        <SkylineBox />
+        <SkylineL />
         <DateTable />
         <Cake cut={cut} onCut={() => setCut((c) => !c)} blown={blown} setBlown={setBlown} />
         <Frame url={PHOTOS[0]} pos={[-2.2, 0.09, 0.1]} rot={[0, THREE.MathUtils.degToRad(20), 0]} />
@@ -392,13 +479,15 @@ function Scene() {
         <Frame url={PHOTOS[2]} pos={[1.25, 0.09, -1.45]} rot={[0, THREE.MathUtils.degToRad(-38), 0]} />
         <Frame url={PHOTOS[3]} pos={[2.35, 0.09, 0.15]} rot={[0, THREE.MathUtils.degToRad(-16), 0]} />
         <Card open={cardOpen} onToggle={() => setCardOpen((o) => !o)} />
+        {/* table‑printed instructions */}
+        <TableText text="Drag to rotate • Scroll to zoom • Right/Shift‑drag to pan" position={[0, 0.101, 3.5]} />
+        <TableText text="Click cake to cut • Press SPACE to blow candle" position={[0, 0.101, 2.4]} />
+        <TableText text="Click card to open / close" position={[0, 0.101, 1.2]} />
         <Environment preset="city" />
       </Suspense>
 
-      {/* big visible knife */}
       <Knife active={cut} />
 
-      {/* OrbitControls → simple drag to rotate, scroll zoom, right/shift drag to pan */}
       <OrbitControls
         enablePan
         enableZoom
@@ -420,28 +509,25 @@ function Scene() {
 }
 
 export default function Page() {
-  const [showGate, setGate] = useState(true);
+  const [started, setStarted] = useState(false);
   const [muted, setMuted] = useState(true);
   const [playing, setPlaying] = useState(false);
   const player = useRef<any>(null);
 
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#0b0b0b" }}>
-      {showGate && (
+      {!started && (
         <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.72)", zIndex: 20, color: "#eee" }}>
           <div style={{ background: "#111", border: "1px solid #333", padding: 22, borderRadius: 14, width: 420, textAlign: "center" }}>
             <div style={{ fontSize: 22, marginBottom: 8 }}>Ready?</div>
             <div style={{ fontSize: 14, opacity: 0.85, marginBottom: 16 }}>Tap Start to enable audio & begin the celebration.</div>
             <button style={{ padding: "12px 16px", background: "#3a86ff", border: 0, borderRadius: 12, color: "#fff", cursor: "pointer", fontSize: 16 }}
-              onClick={() => { setGate(false); setPlaying(true); if (player.current) player.current.playVideo(); }}>Start</button>
+              onClick={() => { setStarted(true); setPlaying(true); if (player.current) player.current.playVideo(); }}>Start</button>
           </div>
         </div>
       )}
 
-      <div style={{ position: "absolute", bottom: 18, width: "100%", textAlign: "center", color: "#fff", opacity: 0.95, font: "700 15px system-ui", textShadow: "0 2px 4px rgba(0,0,0,0.6)", pointerEvents: "none" }}>
-        Drag to rotate • Scroll to zoom • Right/Shift‑drag to pan • Click cake to cut • Click card to open/close • Press <b>Space</b> to blow candle
-      </div>
-
+      {/* bigger control buttons */}
       <div style={{ position: "absolute", top: 14, right: 14, zIndex: 15, display: "flex", gap: 10 }}>
         <button onClick={() => { setMuted((m) => !m); if (player.current) (muted ? player.current.unMute() : player.current.mute()); }}
           style={{ padding: "12px 16px", background: "rgba(255,255,255,.18)", color: "#fff", border: 0, borderRadius: 12, cursor: "pointer", fontSize: 15, backdropFilter: "blur(6px)" }}>
@@ -454,14 +540,15 @@ export default function Page() {
       </div>
 
       <Canvas shadows dpr={[1, 2]} camera={{ position: [3.8, 2.6, 5.4], fov: 45 }}>
-        <Scene />
+        <Scene started={started} />
       </Canvas>
 
+      {/* hidden YouTube audio */}
       <div style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}>
         <YouTube
           videoId={YT_ID}
           opts={{ height: "0", width: "0", playerVars: { autoplay: 1, mute: muted ? 1 : 0, loop: 1, playlist: YT_ID, start: YT_START } }}
-          onReady={(e) => { player.current = e.target; if (showGate) e.target.pauseVideo(); else setPlaying(true); }}
+          onReady={(e) => { player.current = e.target; if (!started) e.target.pauseVideo(); else setPlaying(true); }}
           onEnd={(e) => { e.target.seekTo(YT_START); e.target.playVideo(); }}
         />
       </div>
